@@ -458,6 +458,12 @@ GfxBuffer gfxCreateBuffer(GfxContext context, ID3D12Resource *resource, D3D12_RE
     return buffer;
 }
 
+// Flush the recorded commands, signal the fence when the commands are done.
+GfxResult gfxFlush (GfxContext context, ID3D12Fence * fence, uint64_t fence_signal_value);
+
+// Queue a GPU wait on the command queue for the fence to reach the specified value.
+GfxResult gfxQueueWait(GfxContext context, ID3D12Fence * fence, uint64_t fence_value);
+
 #endif //! GFX_INCLUDE_GFX_H
 
 //!
@@ -4077,6 +4083,23 @@ public:
         command_allocators_[fence_index_]->Reset();
         command_list_->Reset(command_allocators_[fence_index_], nullptr);
         resetState();   // re-install state
+        return kGfxResult_NoError;
+    }
+
+    GfxResult flush(ID3D12Fence *fence, uint64_t fence_value) {
+        command_list_->Close(); // close command list for submit
+        ID3D12CommandList *const command_lists[] = { command_list_ };
+        command_queue_->ExecuteCommandLists(ARRAYSIZE(command_lists), command_lists);
+        command_queue_->Signal(fence, fence_value);
+        command_allocators_[fence_index_]->Reset();
+        command_list_->Reset(command_allocators_[fence_index_], nullptr);
+        resetState();   // re-install state
+        return kGfxResult_NoError;
+    }
+
+    GfxResult queueWait(ID3D12Fence *fence, uint64_t fence_value)
+    {
+        command_queue_->Wait(fence, fence_value);
         return kGfxResult_NoError;
     }
 
@@ -9033,6 +9056,22 @@ D3D12_RESOURCE_STATES gfxTextureGetResourceState(GfxContext context, GfxTexture 
     GfxInternal *gfx = GfxInternal::GetGfx(context);
     if(!gfx) return D3D12_RESOURCE_STATE_COMMON;    // invalid context
     return gfx->getTextureResourceState(texture);
+}
+
+GfxResult gfxFlush (GfxContext context, ID3D12Fence * fence, uint64_t fence_signal_value)
+{
+    GfxInternal *gfx = GfxInternal::GetGfx(context);
+    if(!gfx) return kGfxResult_InvalidParameter;
+    gfx->flush(fence, fence_signal_value);
+    return kGfxResult_NoError;
+}
+
+GfxResult gfxQueueWait(GfxContext context, ID3D12Fence * fence, uint64_t fence_value)
+{
+    GfxInternal *gfx = GfxInternal::GetGfx(context);
+    if(!gfx) return kGfxResult_InvalidParameter;
+    gfx->queueWait(fence, fence_value);
+    return kGfxResult_NoError;
 }
 
 #endif //! GFX_IMPLEMENTATION_DEFINE
