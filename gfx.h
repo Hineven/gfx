@@ -464,6 +464,9 @@ GfxResult gfxFlush (GfxContext context, ID3D12Fence * fence, uint64_t fence_sign
 // Queue a GPU wait on the command queue for the fence to reach the specified value.
 GfxResult gfxQueueWait(GfxContext context, ID3D12Fence * fence, uint64_t fence_value);
 
+GfxResult gfxEnableShared(GfxContext context);
+GfxResult gfxDisableShared(GfxContext context);
+
 #endif //! GFX_INCLUDE_GFX_H
 
 //!
@@ -513,6 +516,10 @@ class GfxInternal
     uint32_t fence_index_ = 0;
     ID3D12Fence **fences_ = nullptr;
     uint64_t *fence_values_ = nullptr;
+
+    // Specifies if we should make the resources currently being created to be in a shared heap.
+    // That allows the CreateSharedHandle function on these resources.
+    bool shared_context_ = false;
 
     bool debug_shaders_ = false;
     IDxcUtils *dxc_utils_ = nullptr;
@@ -1762,6 +1769,11 @@ public:
             resource_desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
             break;
         }
+        // Create resources that may be shared across adapters / applications.
+        // Enable the use of CreateSharedHandle on these resources.
+        if(shared_context_) {
+             allocation_desc.ExtraHeapFlags = D3D12_HEAP_FLAG_SHARED;
+        }
         if(createResource(allocation_desc, resource_desc, resource_state, &gfx_buffer.allocation_, IID_PPV_ARGS(&gfx_buffer.resource_)) != kGfxResult_NoError)
         {
             GFX_PRINT_ERROR(kGfxResult_OutOfMemory, "Unable to create buffer object of size %u MiB", (uint32_t)((size + 1024 * 1024 - 1) / (1024 * 1024)));
@@ -1892,6 +1904,9 @@ public:
         Texture &gfx_texture = textures_.insert(texture);
         D3D12MA::ALLOCATION_DESC allocation_desc = {};
         allocation_desc.HeapType = D3D12_HEAP_TYPE_DEFAULT;
+        if(shared_context_) {
+            allocation_desc.ExtraHeapFlags = D3D12_HEAP_FLAG_SHARED;
+        }
         if(createResource(allocation_desc, resource_desc, resource_state, &gfx_texture.allocation_, IID_PPV_ARGS(&gfx_texture.resource_)) != kGfxResult_NoError)
         {
             GFX_PRINT_ERROR(kGfxResult_OutOfMemory, "Unable to create 2D texture object of size %ux%u", width, height);
@@ -1944,6 +1959,9 @@ public:
         Texture &gfx_texture = textures_.insert(texture);
         D3D12MA::ALLOCATION_DESC allocation_desc = {};
         allocation_desc.HeapType = D3D12_HEAP_TYPE_DEFAULT;
+        if(shared_context_) {
+            allocation_desc.ExtraHeapFlags = D3D12_HEAP_FLAG_SHARED;
+        }
         if(createResource(allocation_desc, resource_desc, resource_state, &gfx_texture.allocation_, IID_PPV_ARGS(&gfx_texture.resource_)) != kGfxResult_NoError)
         {
             GFX_PRINT_ERROR(kGfxResult_OutOfMemory, "Unable to create 2D texture array object of size %ux%ux%u", width, height, slice_count);
@@ -1992,6 +2010,9 @@ public:
         Texture &gfx_texture = textures_.insert(texture);
         D3D12MA::ALLOCATION_DESC allocation_desc = {};
         allocation_desc.HeapType = D3D12_HEAP_TYPE_DEFAULT;
+        if(shared_context_) {
+            allocation_desc.ExtraHeapFlags = D3D12_HEAP_FLAG_SHARED;
+        }
         if(createResource(allocation_desc, resource_desc, resource_state, &gfx_texture.allocation_, IID_PPV_ARGS(&gfx_texture.resource_)) != kGfxResult_NoError)
         {
             GFX_PRINT_ERROR(kGfxResult_OutOfMemory, "Unable to create 3D texture object of size %ux%ux%u", width, height, depth);
@@ -2033,6 +2054,9 @@ public:
         Texture &gfx_texture = textures_.insert(texture);
         D3D12MA::ALLOCATION_DESC allocation_desc = {};
         allocation_desc.HeapType = D3D12_HEAP_TYPE_DEFAULT;
+        if(shared_context_) {
+            allocation_desc.ExtraHeapFlags = D3D12_HEAP_FLAG_SHARED;
+        }
         if(createResource(allocation_desc, resource_desc, resource_state, &gfx_texture.allocation_, IID_PPV_ARGS(&gfx_texture.resource_)) != kGfxResult_NoError)
         {
             GFX_PRINT_ERROR(kGfxResult_OutOfMemory, "Unable to create cubemap texture object of size %u", size);
@@ -4103,6 +4127,16 @@ public:
         return kGfxResult_NoError;
     }
 
+    GfxResult enableShared () {
+        shared_context_ = true;
+        return kGfxResult_NoError;
+    }
+
+    GfxResult disableShared () {
+        shared_context_ = false;
+        return kGfxResult_NoError;
+    }
+
     ID3D12Device *getDevice() const
     {
         return device_;
@@ -5886,6 +5920,9 @@ private:
             allocation_desc.HeapType = D3D12_HEAP_TYPE_DEFAULT;
             resource_desc.Alignment = 0;    // default alignment
             resource_desc.Flags |= usage_flag;  // add usage flag
+            if(shared_context_) {
+                allocation_desc.ExtraHeapFlags = D3D12_HEAP_FLAG_SHARED;
+            }
             GFX_TRY(createResource(allocation_desc, resource_desc, D3D12_RESOURCE_STATE_COPY_DEST, &allocation, IID_PPV_ARGS(&resource)));
             if(texture.resource_state_ != D3D12_RESOURCE_STATE_COPY_SOURCE)
             {
@@ -8138,6 +8175,7 @@ private:
         window_height_ = window_height;
         return kGfxResult_NoError;
     }
+
 };
 
 #pragma warning(pop)
@@ -9071,6 +9109,20 @@ GfxResult gfxQueueWait(GfxContext context, ID3D12Fence * fence, uint64_t fence_v
     GfxInternal *gfx = GfxInternal::GetGfx(context);
     if(!gfx) return kGfxResult_InvalidParameter;
     gfx->queueWait(fence, fence_value);
+    return kGfxResult_NoError;
+}
+
+GfxResult gfxEnableShared (GfxContext context) {
+    GfxInternal *gfx = GfxInternal::GetGfx(context);
+    if(!gfx) return kGfxResult_InvalidParameter;
+    gfx->enableShared();
+    return kGfxResult_NoError;
+}
+
+GfxResult gfxDisableShared (GfxContext context) {
+    GfxInternal *gfx = GfxInternal::GetGfx(context);
+    if(!gfx) return kGfxResult_InvalidParameter;
+    gfx->disableShared();
     return kGfxResult_NoError;
 }
 

@@ -53,7 +53,7 @@ enum GfxConstant
     kGfxConstant_BackBufferCount  = 3,
     kGfxConstant_MaxRenderTarget  = 8,
     kGfxConstant_MaxAnisotropy    = 8,
-    kGfxConstant_MaxNameLength    = 64,
+    kGfxConstant_MaxNameLength    = 128,
     kGfxConstant_NumBindlessSlots = 1024
 };
 
