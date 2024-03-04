@@ -115,6 +115,21 @@ TYPE *gfxBufferGetData(GfxContext context, GfxBuffer buffer)
 //! Texture resources.
 //!
 
+struct GfxFlags
+{
+    enum
+    {
+        // Specifies the (texture) resource should automatically resize to the window size.
+        kAutoResize = 1 << 0,
+        // Specifies the resource should not be automatically reallocated by gfx.
+        kNoReallocation = 1 << 1,
+        // Specifies the resource is shared. CreateSharedHandle is functional on it.
+        kShared = 1 << 2,
+        // Specifies the resource is dedicated. It has offset 0 within a heap or is allocated as a commited resource.
+        kDedicatedAllocation = 1 << 3
+    };
+};
+
 class GfxTexture { GFX_INTERNAL_NAMED_HANDLE(GfxTexture); uint32_t width; uint32_t height; uint32_t depth; DXGI_FORMAT format; uint32_t mip_levels; enum { kType_2D, kType_2DArray, kType_3D, kType_Cube } type; public:
                    inline bool is2DArray() const { return type == kType_2DArray; }
                    inline bool isCube() const { return type == kType_Cube; }
@@ -127,7 +142,7 @@ class GfxTexture { GFX_INTERNAL_NAMED_HANDLE(GfxTexture); uint32_t width; uint32
                    inline uint32_t getMipLevels() const { return mip_levels; } };
 
 GfxTexture gfxCreateTexture2D(GfxContext context, DXGI_FORMAT format);  // creates auto-resize window-sized texture
-GfxTexture gfxCreateTexture2D(GfxContext context, uint32_t width, uint32_t height, DXGI_FORMAT format, uint32_t mip_levels = 1);
+GfxTexture gfxCreateTexture2D(GfxContext context, uint32_t width, uint32_t height, DXGI_FORMAT format, uint32_t mip_levels = 1, uint32_t flags = 0, uint32_t usage = 0);
 GfxTexture gfxCreateTexture2DArray(GfxContext context, uint32_t width, uint32_t height, uint32_t slice_count, DXGI_FORMAT format, uint32_t mip_levels = 1);
 GfxTexture gfxCreateTexture3D(GfxContext context, uint32_t width, uint32_t height, uint32_t depth, DXGI_FORMAT format, uint32_t mip_levels = 1);
 GfxTexture gfxCreateTextureCube(GfxContext context, uint32_t size, DXGI_FORMAT format, uint32_t mip_levels = 1);
@@ -459,13 +474,10 @@ GfxBuffer gfxCreateBuffer(GfxContext context, ID3D12Resource *resource, D3D12_RE
 }
 
 // Flush the recorded commands, signal the fence when the commands are done.
-GfxResult gfxFlush (GfxContext context, ID3D12Fence * fence, uint64_t fence_signal_value);
+GfxResult gfxFlushAndSignal (GfxContext context, ID3D12Fence * fence, uint64_t fence_signal_value);
 
 // Queue a GPU wait on the command queue for the fence to reach the specified value.
 GfxResult gfxQueueWait(GfxContext context, ID3D12Fence * fence, uint64_t fence_value);
-
-GfxResult gfxEnableShared(GfxContext context);
-GfxResult gfxDisableShared(GfxContext context);
 
 #endif //! GFX_INCLUDE_GFX_H
 
@@ -517,9 +529,7 @@ class GfxInternal
     ID3D12Fence **fences_ = nullptr;
     uint64_t *fence_values_ = nullptr;
 
-    // Specifies if we should make the resources currently being created to be in a shared heap.
-    // That allows the CreateSharedHandle function on these resources.
-    bool shared_context_ = false;
+
 
     bool debug_shaders_ = false;
     IDxcUtils *dxc_utils_ = nullptr;
@@ -809,10 +819,6 @@ class GfxInternal
 
     struct Texture : public Object
     {
-        enum Flag
-        {
-            kFlag_AutoResize = 1 << 0
-        };
 
         inline bool isInterop() const { return (allocation_ == nullptr ? true : false); }
 
@@ -1736,7 +1742,7 @@ public:
         return (dxr_device_ != nullptr ? true : false);
     }
 
-    GfxBuffer createBuffer(uint64_t size, void const *data, GfxCpuAccess cpu_access, D3D12_RESOURCE_STATES resource_state = D3D12_RESOURCE_STATE_COMMON)
+    GfxBuffer createBuffer(uint64_t size, void const *data, GfxCpuAccess cpu_access, D3D12_RESOURCE_STATES resource_state = D3D12_RESOURCE_STATE_COMMON, uint32_t flags = 0)
     {
         GfxBuffer buffer = {};
         if(cpu_access >= kGfxCpuAccess_Count)
@@ -1769,10 +1775,14 @@ public:
             resource_desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
             break;
         }
-        // Create resources that may be shared across adapters / applications.
-        // Enable the use of CreateSharedHandle on these resources.
-        if(shared_context_) {
-             allocation_desc.ExtraHeapFlags = D3D12_HEAP_FLAG_SHARED;
+        // Shared resources enable the use of CreateSharedHandle on them.
+        if(flags & GfxFlags::kShared) {
+            allocation_desc.ExtraHeapFlags |= D3D12_HEAP_FLAG_SHARED;
+        }
+        // Create resources that have dedicated memory allocation (possibly using commited resource allocation
+        // or sharing a private heap).
+        if(flags & GfxFlags::kDedicatedAllocation) {
+            allocation_desc.Flags |= D3D12MA::ALLOCATION_FLAG_COMMITTED;
         }
         if(createResource(allocation_desc, resource_desc, resource_state, &gfx_buffer.allocation_, IID_PPV_ARGS(&gfx_buffer.resource_)) != kGfxResult_NoError)
         {
@@ -1871,13 +1881,13 @@ public:
 
     GfxTexture createTexture2D(DXGI_FORMAT format)
     {
-        return createTexture2D(window_width_, window_height_, format, 1, Texture::kFlag_AutoResize);
+        return createTexture2D(window_width_, window_height_, format, 1, GfxFlags::kAutoResize);
     }
 
-    GfxTexture createTexture2D(uint32_t width, uint32_t height, DXGI_FORMAT format, uint32_t mip_levels, uint32_t flags = 0)
+    GfxTexture createTexture2D(uint32_t width, uint32_t height, DXGI_FORMAT format, uint32_t mip_levels, uint32_t flags = 0, uint32_t usage_flags = 0)
     {
         GfxTexture texture = {};
-        if(isInterop() && (flags & Texture::kFlag_AutoResize) != 0)
+        if(isInterop() && (flags & GfxFlags::kAutoResize) != 0)
         {
             GFX_PRINT_ERROR(kGfxResult_InvalidOperation, "Cannot create auto-resize texture objects when using an interop context");
             return texture; // invalid operation
@@ -1900,12 +1910,19 @@ public:
         resource_desc.MipLevels        = (uint16_t)mip_levels;
         resource_desc.Format           = format;
         resource_desc.SampleDesc.Count = 1;
+        resource_desc.Flags            = (D3D12_RESOURCE_FLAGS)usage_flags;
         texture.handle = texture_handles_.allocate_handle();
         Texture &gfx_texture = textures_.insert(texture);
         D3D12MA::ALLOCATION_DESC allocation_desc = {};
         allocation_desc.HeapType = D3D12_HEAP_TYPE_DEFAULT;
-        if(shared_context_) {
-            allocation_desc.ExtraHeapFlags = D3D12_HEAP_FLAG_SHARED;
+        // Shared resources enable the use of CreateSharedHandle on them.
+        if(flags & GfxFlags::kShared) {
+            allocation_desc.ExtraHeapFlags |= D3D12_HEAP_FLAG_SHARED;
+        }
+        // Create resources that have dedicated memory allocation (possibly using commited resource allocation
+        // or sharing a private heap).
+        if(flags & GfxFlags::kDedicatedAllocation) {
+            allocation_desc.Flags |= D3D12MA::ALLOCATION_FLAG_COMMITTED;
         }
         if(createResource(allocation_desc, resource_desc, resource_state, &gfx_texture.allocation_, IID_PPV_ARGS(&gfx_texture.resource_)) != kGfxResult_NoError)
         {
@@ -1918,7 +1935,7 @@ public:
         texture.mip_levels = mip_levels;
         texture.type = GfxTexture::kType_2D;
         texture.depth = 1;
-        if(!((flags & Texture::kFlag_AutoResize) != 0))
+        if(!((flags & GfxFlags::kAutoResize) != 0))
         {
             texture.width = width;
             texture.height = height;
@@ -1928,7 +1945,7 @@ public:
         return texture;
     }
 
-    GfxTexture createTexture2DArray(uint32_t width, uint32_t height, uint32_t slice_count, DXGI_FORMAT format, uint32_t mip_levels)
+    GfxTexture createTexture2DArray(uint32_t width, uint32_t height, uint32_t slice_count, DXGI_FORMAT format, uint32_t mip_levels, uint32_t flags = 0)
     {
         GfxTexture texture = {};
         if(format == DXGI_FORMAT_UNKNOWN || format == DXGI_FORMAT_FORCE_UINT)
@@ -1959,8 +1976,14 @@ public:
         Texture &gfx_texture = textures_.insert(texture);
         D3D12MA::ALLOCATION_DESC allocation_desc = {};
         allocation_desc.HeapType = D3D12_HEAP_TYPE_DEFAULT;
-        if(shared_context_) {
-            allocation_desc.ExtraHeapFlags = D3D12_HEAP_FLAG_SHARED;
+        // Shared resources enable the use of CreateSharedHandle on them.
+        if(flags & GfxFlags::kShared) {
+            allocation_desc.ExtraHeapFlags |= D3D12_HEAP_FLAG_SHARED;
+        }
+        // Create resources that have dedicated memory allocation (possibly using commited resource allocation
+        // or sharing a private heap).
+        if(flags & GfxFlags::kDedicatedAllocation) {
+            allocation_desc.Flags |= D3D12MA::ALLOCATION_FLAG_COMMITTED;
         }
         if(createResource(allocation_desc, resource_desc, resource_state, &gfx_texture.allocation_, IID_PPV_ARGS(&gfx_texture.resource_)) != kGfxResult_NoError)
         {
@@ -1979,7 +2002,7 @@ public:
         return texture;
     }
 
-    GfxTexture createTexture3D(uint32_t width, uint32_t height, uint32_t depth, DXGI_FORMAT format, uint32_t mip_levels)
+    GfxTexture createTexture3D(uint32_t width, uint32_t height, uint32_t depth, DXGI_FORMAT format, uint32_t mip_levels, uint32_t flags = 0)
     {
         GfxTexture texture = {};
         if(format == DXGI_FORMAT_UNKNOWN || format == DXGI_FORMAT_FORCE_UINT)
@@ -2010,8 +2033,14 @@ public:
         Texture &gfx_texture = textures_.insert(texture);
         D3D12MA::ALLOCATION_DESC allocation_desc = {};
         allocation_desc.HeapType = D3D12_HEAP_TYPE_DEFAULT;
-        if(shared_context_) {
-            allocation_desc.ExtraHeapFlags = D3D12_HEAP_FLAG_SHARED;
+        // Shared resources enable the use of CreateSharedHandle on them.
+        if(flags & GfxFlags::kShared) {
+            allocation_desc.ExtraHeapFlags |= D3D12_HEAP_FLAG_SHARED;
+        }
+        // Create resources that have dedicated memory allocation (possibly using commited resource allocation
+        // or sharing a private heap).
+        if(flags & GfxFlags::kDedicatedAllocation) {
+            allocation_desc.Flags |= D3D12MA::ALLOCATION_FLAG_COMMITTED;
         }
         if(createResource(allocation_desc, resource_desc, resource_state, &gfx_texture.allocation_, IID_PPV_ARGS(&gfx_texture.resource_)) != kGfxResult_NoError)
         {
@@ -2030,7 +2059,7 @@ public:
         return texture;
     }
 
-    GfxTexture createTextureCube(uint32_t size, DXGI_FORMAT format, uint32_t mip_levels)
+    GfxTexture createTextureCube(uint32_t size, DXGI_FORMAT format, uint32_t mip_levels, uint32_t flags = 0)
     {
         GfxTexture texture = {};
         if(format == DXGI_FORMAT_UNKNOWN || format == DXGI_FORMAT_FORCE_UINT)
@@ -2054,8 +2083,14 @@ public:
         Texture &gfx_texture = textures_.insert(texture);
         D3D12MA::ALLOCATION_DESC allocation_desc = {};
         allocation_desc.HeapType = D3D12_HEAP_TYPE_DEFAULT;
-        if(shared_context_) {
-            allocation_desc.ExtraHeapFlags = D3D12_HEAP_FLAG_SHARED;
+        // Shared resources enable the use of CreateSharedHandle on them.
+        if(flags & GfxFlags::kShared) {
+            allocation_desc.ExtraHeapFlags |= D3D12_HEAP_FLAG_SHARED;
+        }
+        // Create resources that have dedicated memory allocation (possibly using commited resource allocation
+        // or sharing a private heap).
+        if(flags & GfxFlags::kDedicatedAllocation) {
+            allocation_desc.Flags |= D3D12MA::ALLOCATION_FLAG_COMMITTED;
         }
         if(createResource(allocation_desc, resource_desc, resource_state, &gfx_texture.allocation_, IID_PPV_ARGS(&gfx_texture.resource_)) != kGfxResult_NoError)
         {
@@ -4098,24 +4133,24 @@ public:
 
     GfxResult finish()
     {
-        if(isInterop())
-            return GFX_SET_ERROR(kGfxResult_InvalidOperation, "Cannot synchronize commands when using an interop context");
+        if (isInterop())
+            return GFX_SET_ERROR(
+                kGfxResult_InvalidOperation, "Cannot synchronize commands when using an interop context");
         command_list_->Close(); // close command list for submit
-        ID3D12CommandList *const command_lists[] = { command_list_ };
+        ID3D12CommandList *const command_lists[] = {command_list_};
         command_queue_->ExecuteCommandLists(ARRAYSIZE(command_lists), command_lists);
-        GFX_TRY(sync());    // make sure GPU has gone through all pending work
+        GFX_TRY(sync()); // make sure GPU has gone through all pending work
         command_allocators_[fence_index_]->Reset();
         command_list_->Reset(command_allocators_[fence_index_], nullptr);
-        resetState();   // re-install state
+        resetState(); // re-install state
         return kGfxResult_NoError;
     }
 
-    GfxResult flush(ID3D12Fence *fence, uint64_t fence_value) {
+    GfxResult flushAndSignal(ID3D12Fence *fence, uint64_t fence_value) {
         command_list_->Close(); // close command list for submit
         ID3D12CommandList *const command_lists[] = { command_list_ };
         command_queue_->ExecuteCommandLists(ARRAYSIZE(command_lists), command_lists);
         command_queue_->Signal(fence, fence_value);
-        command_allocators_[fence_index_]->Reset();
         command_list_->Reset(command_allocators_[fence_index_], nullptr);
         resetState();   // re-install state
         return kGfxResult_NoError;
@@ -4124,16 +4159,6 @@ public:
     GfxResult queueWait(ID3D12Fence *fence, uint64_t fence_value)
     {
         command_queue_->Wait(fence, fence_value);
-        return kGfxResult_NoError;
-    }
-
-    GfxResult enableShared () {
-        shared_context_ = true;
-        return kGfxResult_NoError;
-    }
-
-    GfxResult disableShared () {
-        shared_context_ = false;
         return kGfxResult_NoError;
     }
 
@@ -5665,8 +5690,8 @@ private:
                     GFX_ASSERT(gfx_texture.rtv_descriptor_slots_[kernel.draw_state_.color_targets_[i].mip_level][kernel.draw_state_.color_targets_[i].slice] != 0xFFFFFFFFu);
                     color_targets[i] = rtv_descriptors_.getCPUHandle(gfx_texture.rtv_descriptor_slots_[kernel.draw_state_.color_targets_[i].mip_level][kernel.draw_state_.color_targets_[i].slice]);
                     for(uint32_t j = color_target_count; j < i; ++j) color_targets[j] = rtv_descriptors_.getCPUHandle(dummy_rtv_descriptor_);
-                    uint32_t const texture_width  = ((gfx_texture.flags_ & Texture::kFlag_AutoResize) != 0 ? window_width_  : texture.width);
-                    uint32_t const texture_height = ((gfx_texture.flags_ & Texture::kFlag_AutoResize) != 0 ? window_height_ : texture.height);
+                    uint32_t const texture_width  = ((gfx_texture.flags_ & GfxFlags::kAutoResize) != 0 ? window_width_  : texture.width);
+                    uint32_t const texture_height = ((gfx_texture.flags_ & GfxFlags::kAutoResize) != 0 ? window_height_ : texture.height);
                     render_width = GFX_MIN(render_width, texture_width); render_height = GFX_MIN(render_height, texture_height);
                     transitionResource(gfx_texture, D3D12_RESOURCE_STATE_RENDER_TARGET);
                     color_target_count = i + 1;
@@ -5680,8 +5705,8 @@ private:
                 GFX_TRY(ensureTextureHasDepthStencilView(texture, gfx_texture, kernel.draw_state_.depth_stencil_target_.mip_level, kernel.draw_state_.depth_stencil_target_.slice));
                 GFX_ASSERT(gfx_texture.dsv_descriptor_slots_[kernel.draw_state_.depth_stencil_target_.mip_level][kernel.draw_state_.depth_stencil_target_.slice] != 0xFFFFFFFFu);
                 depth_stencil_target = dsv_descriptors_.getCPUHandle(gfx_texture.dsv_descriptor_slots_[kernel.draw_state_.depth_stencil_target_.mip_level][kernel.draw_state_.depth_stencil_target_.slice]);
-                uint32_t const texture_width  = ((gfx_texture.flags_ & Texture::kFlag_AutoResize) != 0 ? window_width_  : texture.width);
-                uint32_t const texture_height = ((gfx_texture.flags_ & Texture::kFlag_AutoResize) != 0 ? window_height_ : texture.height);
+                uint32_t const texture_width  = ((gfx_texture.flags_ & GfxFlags::kAutoResize) != 0 ? window_width_  : texture.width);
+                uint32_t const texture_height = ((gfx_texture.flags_ & GfxFlags::kAutoResize) != 0 ? window_height_ : texture.height);
                 render_width = GFX_MIN(render_width, texture_width); render_height = GFX_MIN(render_height, texture_height);
                 transitionResource(gfx_texture, D3D12_RESOURCE_STATE_DEPTH_WRITE);
             }
@@ -5914,14 +5939,22 @@ private:
         {
             if(texture.isInterop())
                 return GFX_SET_ERROR(kGfxResult_InvalidOperation, "Cannot re-create interop texture objects with different usage flag(s)");
+            if(texture.flags_ & GfxFlags::kNoReallocation)
+                return GFX_SET_ERROR(kGfxResult_InvalidOperation, "Cannot re-create texture objects with different usage flag(s) when `kFlag_NoReallocation' is set");
             ID3D12Resource *resource = nullptr;
             D3D12MA::Allocation *allocation = nullptr;
             D3D12MA::ALLOCATION_DESC allocation_desc = {};
             allocation_desc.HeapType = D3D12_HEAP_TYPE_DEFAULT;
             resource_desc.Alignment = 0;    // default alignment
             resource_desc.Flags |= usage_flag;  // add usage flag
-            if(shared_context_) {
-                allocation_desc.ExtraHeapFlags = D3D12_HEAP_FLAG_SHARED;
+            // Shared resources enable the use of CreateSharedHandle on them.
+            if(texture.flags_ & GfxFlags::kShared) {
+                allocation_desc.ExtraHeapFlags |= D3D12_HEAP_FLAG_SHARED;
+            }
+            // Create resources that have dedicated memory allocation (possibly using commited resource allocation
+            // or sharing a private heap).
+            if(texture.flags_ & GfxFlags::kDedicatedAllocation) {
+                allocation_desc.Flags |= D3D12MA::ALLOCATION_FLAG_COMMITTED;
             }
             GFX_TRY(createResource(allocation_desc, resource_desc, D3D12_RESOURCE_STATE_COPY_DEST, &allocation, IID_PPV_ARGS(&resource)));
             if(texture.resource_state_ != D3D12_RESOURCE_STATE_COPY_SOURCE)
@@ -8130,8 +8163,12 @@ private:
         for(uint32_t i = 0; i < textures_.size(); ++i)
         {
             Texture &texture = textures_.data()[i];
-            if(!((texture.flags_ & Texture::kFlag_AutoResize) != 0))
+            if(!((texture.flags_ & GfxFlags::kAutoResize) != 0))
                 continue;   // no need to auto-resize
+            if((texture.flags_ & GfxFlags::kNoReallocation) != 0) {
+                GFX_PRINT_ERROR(kGfxResult_InternalError, "Unable to auto-resize texture object(s) to %ux%u", window_width, window_height);
+                continue;  // no reallocation allowed
+            }
             ID3D12Resource *resource = nullptr;
             D3D12MA::Allocation *allocation = nullptr;
             D3D12_RESOURCE_DESC
@@ -8297,12 +8334,12 @@ GfxTexture gfxCreateTexture2D(GfxContext context, DXGI_FORMAT format)
     return gfx->createTexture2D(format);
 }
 
-GfxTexture gfxCreateTexture2D(GfxContext context, uint32_t width, uint32_t height, DXGI_FORMAT format, uint32_t mip_levels)
+GfxTexture gfxCreateTexture2D(GfxContext context, uint32_t width, uint32_t height, DXGI_FORMAT format, uint32_t mip_levels, uint32_t flags, uint32_t dxgi_usage)
 {
     GfxTexture const texture = {};
     GfxInternal *gfx = GfxInternal::GetGfx(context);
     if(!gfx) return texture;    // invalid context
-    return gfx->createTexture2D(width, height, format, mip_levels);
+    return gfx->createTexture2D(width, height, format, mip_levels, flags, dxgi_usage);
 }
 
 GfxTexture gfxCreateTexture2DArray(GfxContext context, uint32_t width, uint32_t height, uint32_t slice_count, DXGI_FORMAT format, uint32_t mip_levels)
@@ -9096,11 +9133,11 @@ D3D12_RESOURCE_STATES gfxTextureGetResourceState(GfxContext context, GfxTexture 
     return gfx->getTextureResourceState(texture);
 }
 
-GfxResult gfxFlush (GfxContext context, ID3D12Fence * fence, uint64_t fence_signal_value)
+GfxResult gfxFlushAndSignal (GfxContext context, ID3D12Fence * fence, uint64_t fence_signal_value)
 {
     GfxInternal *gfx = GfxInternal::GetGfx(context);
     if(!gfx) return kGfxResult_InvalidParameter;
-    gfx->flush(fence, fence_signal_value);
+    gfx->flushAndSignal(fence, fence_signal_value);
     return kGfxResult_NoError;
 }
 
@@ -9109,20 +9146,6 @@ GfxResult gfxQueueWait(GfxContext context, ID3D12Fence * fence, uint64_t fence_v
     GfxInternal *gfx = GfxInternal::GetGfx(context);
     if(!gfx) return kGfxResult_InvalidParameter;
     gfx->queueWait(fence, fence_value);
-    return kGfxResult_NoError;
-}
-
-GfxResult gfxEnableShared (GfxContext context) {
-    GfxInternal *gfx = GfxInternal::GetGfx(context);
-    if(!gfx) return kGfxResult_InvalidParameter;
-    gfx->enableShared();
-    return kGfxResult_NoError;
-}
-
-GfxResult gfxDisableShared (GfxContext context) {
-    GfxInternal *gfx = GfxInternal::GetGfx(context);
-    if(!gfx) return kGfxResult_InvalidParameter;
-    gfx->disableShared();
     return kGfxResult_NoError;
 }
 
