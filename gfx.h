@@ -28,6 +28,10 @@ SOFTWARE.
 #include "dxgi1_4.h"
 #include "gfx_core.h"
 
+// NVAPI support
+#include "nvShaderExtnEnums.h"
+#include "nvapi.h"
+
 //!
 //! Context creation/destruction.
 //!
@@ -44,7 +48,8 @@ enum GfxCreateContextFlag
 {
     kGfxCreateContextFlag_EnableDebugLayer       = 1 << 0,
     kGfxCreateContextFlag_EnableShaderDebugging  = 1 << 1,
-    kGfxCreateContextFlag_EnableStablePowerState = 1 << 2
+    kGfxCreateContextFlag_EnableStablePowerState = 1 << 2,
+    kGfxCreateContextFlag_EnableNVAPI            = 1 << 3,
 };
 typedef uint32_t GfxCreateContextFlags;
 
@@ -460,6 +465,8 @@ ID3D12Resource *gfxAccelerationStructureGetResource(GfxContext context, GfxAccel
 
 D3D12_RESOURCE_STATES gfxBufferGetResourceState(GfxContext context, GfxBuffer buffer);
 D3D12_RESOURCE_STATES gfxTextureGetResourceState(GfxContext context, GfxTexture texture);
+
+GfxResult gfxGetNVAPIEnabled(GfxContext context, bool & enabled);
 
 //!
 //! Template helpers.
@@ -1242,6 +1249,9 @@ class GfxInternal
     GfxArray<Sbt> sbts_;
     GfxHandles sbt_handles_;
 
+    // If we should enable NVAPI.
+    bool use_NVAPI_ {};
+
 public:
     GfxInternal(GfxContext &gfx) : buffer_handles_("buffer"), texture_handles_("texture"), sampler_state_handles_("sampler state")
                                  , acceleration_structure_handles_("acceleration structure"), raytracing_primitive_handles_("raytracing primitive")
@@ -1364,6 +1374,9 @@ public:
             adapters[i] = nullptr;
         }
         debug_shaders_ = ((flags & kGfxCreateContextFlag_EnableShaderDebugging) != 0);
+        if(debug_shaders_) {
+            puts("Shader debugging enabled");
+        }
         device_->QueryInterface(IID_PPV_ARGS(&dxr_device_));
         SetDebugName(device_, "gfx_Device");
 
@@ -1440,6 +1453,20 @@ public:
         resource_barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
         resource_barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
         command_list_->ResourceBarrier(1, &resource_barrier);
+
+        if(flags & kGfxCreateContextFlag_EnableNVAPI)
+        {
+            NvAPI_Initialize();
+            bool bSupported = false;
+            NvAPI_Status NvapiStatus = NvAPI_D3D12_IsNvShaderExtnOpCodeSupported(device_, NV_EXTN_OP_SHFL, &bSupported);
+            if(NvapiStatus == NVAPI_OK && bSupported)
+            {
+                use_NVAPI_ = true;
+            } else {
+                use_NVAPI_ = false;
+                return GFX_SET_ERROR(kGfxResult_InternalError, "NvShfl commands are not supported on current GPU");
+            }
+        }
 
         return initializeCommon(context);
     }
@@ -1740,6 +1767,10 @@ public:
     inline bool isRaytracingSupported() const
     {
         return (dxr_device_ != nullptr ? true : false);
+    }
+
+    inline bool isNVAPIEnabled () const {
+        return use_NVAPI_;
     }
 
     GfxBuffer createBuffer(uint64_t size, void const *data, GfxCpuAccess cpu_access, D3D12_RESOURCE_STATES resource_state = D3D12_RESOURCE_STATE_COMMON, uint32_t flags = 0)
@@ -5600,7 +5631,35 @@ private:
             pso_desc.BlendState.RenderTarget->DestBlendAlpha = draw_state.blend_state_.dst_blend_alpha_;
             pso_desc.BlendState.RenderTarget->BlendOpAlpha   = draw_state.blend_state_.blend_op_alpha_;
         }
-        device_->CreateGraphicsPipelineState(&pso_desc, IID_PPV_ARGS(&kernel.pipeline_state_));
+        if(!use_NVAPI_)
+        {
+            device_->CreateGraphicsPipelineState(&pso_desc, IID_PPV_ARGS(&kernel.pipeline_state_));
+        } else {
+            // Also fill the extension structure.
+            // Use the same UAV slot index and register space that are declared in the shader.
+            NVAPI_D3D12_PSO_SET_SHADER_EXTENSION_SLOT_DESC ExtensionDesc {};
+            ExtensionDesc.baseVersion = NV_PSO_EXTENSION_DESC_VER;
+            ExtensionDesc.psoExtension = NV_PSO_SET_SHADER_EXTNENSION_SLOT_AND_SPACE;
+            ExtensionDesc.version = NV_SET_SHADER_EXTENSION_SLOT_DESC_VER;
+            // The same as in the shader.
+            ExtensionDesc.uavSlot = 51;
+            ExtensionDesc.registerSpace = 0;
+
+            // Put the pointer to the extension into an array - there can be multiple extensions enabled at once.
+            // Other supported extensions are:
+            //  - Extended rasterizer state
+            //  - Pass-through geometry shader, implicit or explicit
+            //  - Depth bound test
+            const NVAPI_D3D12_PSO_EXTENSION_DESC* pExtensions[] = { &ExtensionDesc };
+
+            // Now create the PSO.
+            NvAPI_Status NvapiStatus = NvAPI_D3D12_CreateGraphicsPipelineState(device_, &pso_desc, 1, pExtensions, &kernel.pipeline_state_);
+
+            if(NvapiStatus != NVAPI_OK)
+            {
+                return GFX_SET_ERROR(kGfxResult_InternalError, "Failed to create PSO with NVAPI");
+            }
+        }
         return kGfxResult_NoError;
     }
 
@@ -9146,6 +9205,14 @@ GfxResult gfxQueueWait(GfxContext context, ID3D12Fence * fence, uint64_t fence_v
     GfxInternal *gfx = GfxInternal::GetGfx(context);
     if(!gfx) return kGfxResult_InvalidParameter;
     gfx->queueWait(fence, fence_value);
+    return kGfxResult_NoError;
+}
+
+GfxResult gfxGetNVAPIEnabled(GfxContext context, bool & enabled)
+{
+    GfxInternal *gfx = GfxInternal::GetGfx(context);
+    if(!gfx) return kGfxResult_InvalidParameter;
+    enabled = gfx->isNVAPIEnabled();
     return kGfxResult_NoError;
 }
 

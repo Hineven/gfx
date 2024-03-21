@@ -37,6 +37,7 @@ target_include_directories(gfx PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/st
 target_include_directories(gfx PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/KTX-Software/include)
 target_include_directories(gfx PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/D3D12MemoryAllocator/include)
 target_include_directories(gfx PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/D3D12MemoryAllocator/src)
+target_include_directories(gfx PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/nvapi550)
 
 target_compile_options(ktx      PRIVATE "/wd4005")  # 'KTX_API': macro redefinition
 target_compile_options(ktx      PRIVATE "/wd4244")  # '=': conversion from '__int64' to 'ktx_uint32_t', possible loss of data
@@ -67,7 +68,12 @@ set_target_properties(WinPixEventRuntime PROPERTIES
     IMPORTED_IMPLIB ${GFX_PIX_PATH}/bin/x64/WinPixEventRuntime.lib
 )
 
-target_link_libraries(gfx PUBLIC d3d12.lib dxgi.lib glm tinyobjloader ktx dxcompiler dxil WinPixEventRuntime)
+add_library(nvapi SHARED IMPORTED)
+set_target_properties(nvapi PROPERTIES
+    IMPORTED_IMPLIB ${CMAKE_CURRENT_SOURCE_DIR}/third_party/nvapi550/amd64/nvapi64.lib
+)
+
+target_link_libraries(gfx PUBLIC d3d12.lib dxgi.lib glm tinyobjloader ktx dxcompiler dxil WinPixEventRuntime nvapi)
 
 if(GFX_BUILD_EXAMPLES)
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/examples)
