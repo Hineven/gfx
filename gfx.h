@@ -501,6 +501,9 @@ GfxBuffer gfxCreateBuffer(GfxContext context, ID3D12Resource *resource, D3D12_RE
 #pragma warning(push)
 #pragma warning(disable:4996)   // this function or variable may be unsafe
 
+// Tiny hack for missing functionality in gfx
+bool __override_gfx_draw_topology_fans {false};
+
 class GfxInternal
 {
     GFX_NON_COPYABLE(GfxInternal);
@@ -6050,7 +6053,7 @@ private:
                 bound_scissor_rect_ = scissor_rect;
                 command_list_->RSSetScissorRects(1, &scissor_rect);
             }
-            command_list_->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            command_list_->IASetPrimitiveTopology(__override_gfx_draw_topology_fans ? D3D_PRIMITIVE_TOPOLOGY_TRIANGLEFAN : D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
             command_list_->OMSetRenderTargets(color_target_count, color_targets, false, depth_stencil_target.ptr != 0 ? &depth_stencil_target : nullptr);
         }
         uint64_t const previous_descriptor_heap_id = getDescriptorHeapId();
