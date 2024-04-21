@@ -501,8 +501,10 @@ GfxBuffer gfxCreateBuffer(GfxContext context, ID3D12Resource *resource, D3D12_RE
 #pragma warning(push)
 #pragma warning(disable:4996)   // this function or variable may be unsafe
 
-// Tiny hack for missing functionality in gfx
-bool __override_gfx_draw_topology_fans {false};
+// Tiny hacks for missing functionality in gfx
+bool __override_gfx_null_render_target {false};
+int  __override_gfx_null_render_target_width {0};
+int  __override_gfx_null_render_target_height {0};
 
 class GfxInternal
 {
@@ -560,6 +562,14 @@ class GfxInternal
     GfxBuffer *constant_buffer_pool_ = nullptr;
     uint64_t *constant_buffer_pool_cursors_ = nullptr;
     std::vector<GfxRaytracingPrimitive> active_raytracing_primitives_;
+
+    // Fix buffers for reduce
+    GfxBuffer reduce_level_1_buffer_t_ = {};
+    GfxBuffer reduce_level_2_buffer_t_ = {};
+    GfxBuffer num_groups_level_1_buffer_t_ = {};
+    GfxBuffer num_groups_level_2_buffer_t_ = {};
+    GfxBuffer reduce_level_1_args_buffer_t_ = {};
+    GfxBuffer reduce_level_2_args_buffer_t_ = {};
 
     struct Viewport
     {
@@ -4009,12 +4019,51 @@ public:
                 return GFX_SET_ERROR(kGfxResult_OutOfMemory, "Unable to allocate scratch memory for scan");
             texture_upload_buffer_.setName("gfx_TextureUploadBuffer");
         }
-        GfxBuffer const reduce_level_1_buffer = createBufferRange(texture_upload_buffer_, 0, num_groups_level_1 << 2);
-        GfxBuffer const reduce_level_2_buffer = createBufferRange(texture_upload_buffer_, num_groups_level_1 << 2, num_groups_level_2 << 2);
-        GfxBuffer const num_groups_level_1_buffer = createBufferRange(texture_upload_buffer_, (num_groups_level_1 + num_groups_level_2) << 2, 4);
-        GfxBuffer const num_groups_level_2_buffer = createBufferRange(texture_upload_buffer_, (num_groups_level_1 + num_groups_level_2 + 1) << 2, 4);
-        GfxBuffer const reduce_level_1_args_buffer = createBufferRange(texture_upload_buffer_, (num_groups_level_1 + num_groups_level_2 + 2) << 2, 4 << 2);
-        GfxBuffer const reduce_level_2_args_buffer = createBufferRange(texture_upload_buffer_, (num_groups_level_1 + num_groups_level_2 + 6) << 2, 4 << 2);
+        // Note: it seems that there is a bug with NVIDIA when using ranged buffers for dispatches.
+        // Create individual buffers instead.
+
+        // GfxBuffer const reduce_level_1_buffer = createBufferRange(texture_upload_buffer_, 0, num_groups_level_1 << 2);
+        // GfxBuffer const reduce_level_2_buffer = createBufferRange(texture_upload_buffer_, num_groups_level_1 << 2, num_groups_level_2 << 2);
+        // GfxBuffer const num_groups_level_1_buffer = createBufferRange(texture_upload_buffer_, (num_groups_level_1 + num_groups_level_2) << 2, 4);
+        // GfxBuffer const num_groups_level_2_buffer = createBufferRange(texture_upload_buffer_, (num_groups_level_1 + num_groups_level_2 + 1) << 2, 4);
+        // GfxBuffer const reduce_level_1_args_buffer = createBufferRange(texture_upload_buffer_, (num_groups_level_1 + num_groups_level_2 + 2) << 2, 4 << 2);
+        // GfxBuffer const reduce_level_2_args_buffer = createBufferRange(texture_upload_buffer_, (num_groups_level_1 + num_groups_level_2 + 6) << 2, 4 << 2);
+
+        //GfxBuffer createBuffer(uint64_t size, void const *data, GfxCpuAccess cpu_access, D3D12_RESOURCE_STATES resource_state = D3D12_RESOURCE_STATE_COMMON);
+        if(reduce_level_1_buffer_t_.getSize() < (num_groups_level_1 << 2)) {
+            if(reduce_level_1_buffer_t_)
+                destroyBuffer(reduce_level_1_buffer_t_);
+            reduce_level_1_buffer_t_ = createBuffer(num_groups_level_1 << 2, nullptr, kGfxCpuAccess_None);
+            reduce_level_1_buffer_t_.setName("gfx_ReduceLevel1Buffer");
+        }
+        if(reduce_level_2_buffer_t_.getSize() < (num_groups_level_2 << 2)) {
+            if(reduce_level_2_buffer_t_)
+                destroyBuffer(reduce_level_2_buffer_t_);
+            reduce_level_2_buffer_t_ = createBuffer(num_groups_level_2 << 2, nullptr, kGfxCpuAccess_None);
+            reduce_level_2_buffer_t_.setName("gfx_ReduceLevel2Buffer");
+        }
+        if(num_groups_level_1_buffer_t_.getSize() < 4) {
+            num_groups_level_1_buffer_t_ = createBuffer(4, nullptr, kGfxCpuAccess_None);
+            num_groups_level_1_buffer_t_.setName("gfx_NumGroupsLevel1Buffer");
+        }
+        if(num_groups_level_2_buffer_t_.getSize() < 4) {
+            num_groups_level_2_buffer_t_ = createBuffer(4, nullptr, kGfxCpuAccess_None);
+            num_groups_level_2_buffer_t_.setName("gfx_NumGroupsLevel2Buffer");
+        }
+        if(reduce_level_1_args_buffer_t_.getSize() < (4 << 2)) {
+            reduce_level_1_args_buffer_t_ = createBuffer(4 << 2, nullptr, kGfxCpuAccess_None);
+            reduce_level_1_args_buffer_t_.setName("gfx_ReduceLevel1ArgsBuffer");
+        }
+        if(reduce_level_2_args_buffer_t_.getSize() < (4 << 2)) {
+            reduce_level_2_args_buffer_t_ = createBuffer(4 << 2, nullptr, kGfxCpuAccess_None);
+            reduce_level_2_args_buffer_t_.setName("gfx_ReduceLevel2ArgsBuffer");
+        }
+        GfxBuffer const & reduce_level_1_buffer = reduce_level_1_buffer_t_;
+        GfxBuffer const & reduce_level_2_buffer = reduce_level_2_buffer_t_;
+        GfxBuffer const & num_groups_level_1_buffer = num_groups_level_1_buffer_t_;
+        GfxBuffer const & num_groups_level_2_buffer = num_groups_level_2_buffer_t_;
+        GfxBuffer const & reduce_level_1_args_buffer = reduce_level_1_args_buffer_t_;
+        GfxBuffer const & reduce_level_2_args_buffer = reduce_level_2_args_buffer_t_;
         if(!reduce_level_1_buffer || !reduce_level_2_buffer || !num_groups_level_1_buffer || !num_groups_level_2_buffer || !reduce_level_1_args_buffer || !reduce_level_2_args_buffer)
         {
             destroyBuffer(reduce_level_1_buffer); destroyBuffer(reduce_level_2_buffer);
@@ -4067,9 +4116,11 @@ public:
         setProgramBuffer(scan_kernels.scan_program_, "g_PartialResults", dst);
         setProgramBuffer(scan_kernels.scan_program_, "g_InputKeys", num_keys > keys_per_group ? num_groups_level_1 > keys_per_group ? reduce_level_2_buffer : reduce_level_1_buffer : src);
         encodeDispatch(1, 1, 1);    // reduce to output
-        destroyBuffer(reduce_level_1_buffer); destroyBuffer(reduce_level_2_buffer);
-        destroyBuffer(num_groups_level_1_buffer); destroyBuffer(num_groups_level_2_buffer);
-        destroyBuffer(reduce_level_1_args_buffer); destroyBuffer(reduce_level_2_args_buffer);
+
+        // No need to release these buffers as they are allocated upon each call
+        // destroyBuffer(reduce_level_1_buffer); destroyBuffer(reduce_level_2_buffer);
+        // destroyBuffer(num_groups_level_1_buffer); destroyBuffer(num_groups_level_2_buffer);
+        // destroyBuffer(reduce_level_1_args_buffer); destroyBuffer(reduce_level_2_args_buffer);
         if(kernel_handles_.has_handle(bound_kernel.handle))
             encodeBindKernel(bound_kernel);
         else
@@ -6024,8 +6075,16 @@ private:
             }
             if(color_target_count == 0 && depth_stencil_target.ptr == 0)    // special case - if no color target is supplied, draw to back buffer
             {
-                render_width = window_width_; render_height = window_height_;
-                color_targets[color_target_count++] = rtv_descriptors_.getCPUHandle(back_buffer_rtvs_[fence_index_]);
+                // Hack to enable null render target
+                if(__override_gfx_null_render_target) {
+                    render_width = __override_gfx_null_render_target_width;
+                    render_height = __override_gfx_null_render_target_height;
+                } else {
+                    render_width  = window_width_;
+                    render_height = window_height_;
+                    color_targets[color_target_count++] =
+                        rtv_descriptors_.getCPUHandle(back_buffer_rtvs_[fence_index_]);
+                }
             }
             D3D12_VIEWPORT viewport = { 0.0f, 0.0f, (float)render_width, (float)render_height, D3D12_MIN_DEPTH, D3D12_MAX_DEPTH };
             if(viewport_.x_ != 0.0f || viewport_.y_ != 0.0f || viewport_.width_ != 0.0f || viewport_.height_ != 0.0f)
@@ -6053,7 +6112,7 @@ private:
                 bound_scissor_rect_ = scissor_rect;
                 command_list_->RSSetScissorRects(1, &scissor_rect);
             }
-            command_list_->IASetPrimitiveTopology(__override_gfx_draw_topology_fans ? D3D_PRIMITIVE_TOPOLOGY_TRIANGLEFAN : D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            command_list_->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
             command_list_->OMSetRenderTargets(color_target_count, color_targets, false, depth_stencil_target.ptr != 0 ? &depth_stencil_target : nullptr);
         }
         uint64_t const previous_descriptor_heap_id = getDescriptorHeapId();
