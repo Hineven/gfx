@@ -505,6 +505,9 @@ GfxBuffer gfxCreateBuffer(GfxContext context, ID3D12Resource *resource, D3D12_RE
 bool __override_gfx_null_render_target {false};
 int  __override_gfx_null_render_target_width {0};
 int  __override_gfx_null_render_target_height {0};
+bool __override_primitive_topology {false};
+D3D12_PRIMITIVE_TOPOLOGY_TYPE __override_primitive_topology_type {D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE};
+D3D_PRIMITIVE_TOPOLOGY __override_primitive_topology_draw {D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST};
 
 class GfxInternal
 {
@@ -5981,6 +5984,12 @@ private:
         }
         D3D12_GRAPHICS_PIPELINE_STATE_DESC
         pso_desc                                = GetDefaultPSODesc();
+
+        if(__override_primitive_topology)
+        {
+            pso_desc.PrimitiveTopologyType = __override_primitive_topology_type;
+        }
+
         pso_desc.pRootSignature                 = kernel.root_signature_;
         pso_desc.VS                             = GetShaderBytecode(kernel.vs_bytecode_);
         pso_desc.PS                             = GetShaderBytecode(kernel.ps_bytecode_);
@@ -6173,7 +6182,12 @@ private:
                 bound_scissor_rect_ = scissor_rect;
                 command_list_->RSSetScissorRects(1, &scissor_rect);
             }
-            command_list_->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            if(__override_primitive_topology)
+            {
+                command_list_->IASetPrimitiveTopology(__override_primitive_topology_draw);
+            } else {
+                command_list_->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            }
             command_list_->OMSetRenderTargets(color_target_count, color_targets, false, depth_stencil_target.ptr != 0 ? &depth_stencil_target : nullptr);
         }
         uint64_t const previous_descriptor_heap_id = getDescriptorHeapId();
