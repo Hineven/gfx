@@ -501,6 +501,7 @@ GfxBuffer gfxCreateBuffer(GfxContext context, ID3D12Resource *resource, D3D12_RE
 #pragma warning(push)
 #pragma warning(disable:4996)   // this function or variable may be unsafe
 
+
 // Tiny hacks for missing functionality in gfx
 bool __override_gfx_null_render_target {false};
 int  __override_gfx_null_render_target_width {0};
