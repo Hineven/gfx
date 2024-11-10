@@ -143,6 +143,20 @@ class GfxInternal
     uint64_t *constant_buffer_pool_cursors_ = nullptr;
     std::vector<GfxRaytracingPrimitive> active_raytracing_primitives_;
 
+    // Fix buffers for reduce
+    GfxBuffer reduce_level_1_buffer_t_ = {};
+    GfxBuffer reduce_level_2_buffer_t_ = {};
+    GfxBuffer reduce_level_1_args_buffer_t_ = {};
+    GfxBuffer reduce_level_2_args_buffer_t_ = {};
+
+    GfxBuffer scan_level_1_buffer_t_ = {};
+    GfxBuffer scan_level_2_buffer_t_ = {};
+    GfxBuffer scan_level_1_args_buffer_t_ = {};
+    GfxBuffer scan_level_2_args_buffer_t_ = {};
+
+    GfxBuffer num_groups_level_1_buffer_t_ = {};
+    GfxBuffer num_groups_level_2_buffer_t_ = {};
+
     struct RenderTarget
     {
         GfxTexture texture_ = {};
@@ -4126,12 +4140,66 @@ public:
                 return GFX_SET_ERROR(kGfxResult_OutOfMemory, "Unable to allocate scratch memory for scan");
             texture_upload_buffer_.setName("gfx_TextureUploadBuffer");
         }
-        GfxBuffer const scan_level_1_buffer = createBufferRange(texture_upload_buffer_, 0, (uint64_t)num_groups_level_1 << 2);
-        GfxBuffer const scan_level_2_buffer = createBufferRange(texture_upload_buffer_, (uint64_t)num_groups_level_1 << 2, (uint64_t)num_groups_level_2 << 2);
-        GfxBuffer const num_groups_level_1_buffer = createBufferRange(texture_upload_buffer_, ((uint64_t)num_groups_level_1 + num_groups_level_2) << 2, 4);
-        GfxBuffer const num_groups_level_2_buffer = createBufferRange(texture_upload_buffer_, ((uint64_t)num_groups_level_1 + num_groups_level_2 + 1) << 2, 4);
-        GfxBuffer const scan_level_1_args_buffer = createBufferRange(texture_upload_buffer_, ((uint64_t)num_groups_level_1 + num_groups_level_2 + 2) << 2, 4 << 2);
-        GfxBuffer const scan_level_2_args_buffer = createBufferRange(texture_upload_buffer_, ((uint64_t)num_groups_level_1 + num_groups_level_2 + 6) << 2, 4 << 2);
+        // GfxBuffer const scan_level_1_buffer = createBufferRange(texture_upload_buffer_, 0, (uint64_t)num_groups_level_1 << 2);
+        // GfxBuffer const scan_level_2_buffer = createBufferRange(texture_upload_buffer_, (uint64_t)num_groups_level_1 << 2, (uint64_t)num_groups_level_2 << 2);
+        // GfxBuffer const num_groups_level_1_buffer = createBufferRange(texture_upload_buffer_, ((uint64_t)num_groups_level_1 + num_groups_level_2) << 2, 4);
+        // GfxBuffer const num_groups_level_2_buffer = createBufferRange(texture_upload_buffer_, ((uint64_t)num_groups_level_1 + num_groups_level_2 + 1) << 2, 4);
+        // GfxBuffer const scan_level_1_args_buffer = createBufferRange(texture_upload_buffer_, ((uint64_t)num_groups_level_1 + num_groups_level_2 + 2) << 2, 4 << 2);
+        // GfxBuffer const scan_level_2_args_buffer = createBufferRange(texture_upload_buffer_, ((uint64_t)num_groups_level_1 + num_groups_level_2 + 6) << 2, 4 << 2);
+        {
+            if(scan_level_1_buffer_t_.size != ((size_t)num_groups_level_1 << 2))
+            {
+                destroyBuffer(scan_level_1_buffer_t_);
+                scan_level_1_buffer_t_ = createBuffer((size_t)num_groups_level_1 << 2, nullptr, kGfxCpuAccess_None);
+                scan_level_1_buffer_t_.setName("gfx_ScanLevel1Buffer");
+            }
+        }
+        {
+            if(scan_level_2_buffer_t_.size != ((size_t)num_groups_level_2 << 2u))
+            {
+                destroyBuffer(scan_level_2_buffer_t_);
+                scan_level_2_buffer_t_ = createBuffer((size_t)num_groups_level_2 << 2u, nullptr, kGfxCpuAccess_None);
+                scan_level_2_buffer_t_.setName("gfx_ScanLevel2Buffer");
+            }
+        }
+        {
+            if(num_groups_level_1_buffer_t_.size != 4)
+            {
+                destroyBuffer(num_groups_level_1_buffer_t_);
+                num_groups_level_1_buffer_t_ = createBuffer(4, nullptr, kGfxCpuAccess_None);
+                num_groups_level_1_buffer_t_.setName("gfx_NumGroupsLevel1Buffer");
+            }
+        }
+        {
+            if(num_groups_level_2_buffer_t_.size != 4)
+            {
+                destroyBuffer(num_groups_level_2_buffer_t_);
+                num_groups_level_2_buffer_t_ = createBuffer(4, nullptr, kGfxCpuAccess_None);
+                num_groups_level_2_buffer_t_.setName("gfx_NumGroupsLevel2Buffer");
+            }
+        }
+        {
+            if(scan_level_1_args_buffer_t_.size != (4 << 2))
+            {
+                destroyBuffer(scan_level_1_args_buffer_t_);
+                scan_level_1_args_buffer_t_ = createBuffer(4 << 2, nullptr, kGfxCpuAccess_None);
+                scan_level_1_args_buffer_t_.setName("gfx_ScanLevel1ArgsBuffer");
+            }
+        }
+        {
+            if(scan_level_2_args_buffer_t_.size != (4 << 2))
+            {
+                destroyBuffer(scan_level_2_args_buffer_t_);
+                scan_level_2_args_buffer_t_ = createBuffer(4 << 2, nullptr, kGfxCpuAccess_None);
+                scan_level_2_args_buffer_t_.setName("gfx_ScanLevel2ArgsBuffer");
+            }
+        }
+        GfxBuffer const scan_level_1_buffer = scan_level_1_buffer_t_;
+        GfxBuffer const scan_level_2_buffer = scan_level_2_buffer_t_;
+        GfxBuffer const num_groups_level_1_buffer = num_groups_level_1_buffer_t_;
+        GfxBuffer const num_groups_level_2_buffer = num_groups_level_2_buffer_t_;
+        GfxBuffer const scan_level_1_args_buffer = scan_level_1_args_buffer_t_;
+        GfxBuffer const scan_level_2_args_buffer = scan_level_2_args_buffer_t_;
         if(!scan_level_1_buffer || !scan_level_2_buffer || !num_groups_level_1_buffer || !num_groups_level_2_buffer || !scan_level_1_args_buffer || !scan_level_2_args_buffer)
         {
             destroyBuffer(scan_level_1_buffer); destroyBuffer(scan_level_2_buffer);
