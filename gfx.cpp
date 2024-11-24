@@ -364,6 +364,7 @@ class GfxInternal
                 D3D12_CULL_MODE cull_mode_ = D3D12_CULL_MODE_BACK;
                 D3D12_FILL_MODE fill_mode_ = D3D12_FILL_MODE_SOLID;
             } raster_state_;
+            bool enable_geometry_shader_ = true;
         };
 
         DrawState() : reference_count_(0) {}
@@ -1207,7 +1208,7 @@ public:
 
         if((flags & kGfxCreateContextFlag_EnableDebugLayer) != 0)
         {
-            ID3D12InfoQueue1 *debug_callback = nullptr;
+            ID3D12InfoQueue1 * debug_callback = nullptr;
             if(SUCCEEDED(device_->QueryInterface(IID_PPV_ARGS(&debug_callback))))
             {
                 DWORD cookie = 0;
@@ -1221,6 +1222,27 @@ public:
                 };
                 debug_callback->RegisterMessageCallback(callback, D3D12_MESSAGE_CALLBACK_FLAG_NONE, nullptr, &cookie);
                 debug_callback->Release();
+            } else {
+                GFX_PRINTLN("The device does not support ID3D12InfoQueue1. Falling back to ID3D12InfoQueue,"
+                            " which requires manual invocation to flush the debug messages.");
+                // Fall back to non-callback based debug output
+                ID3D12InfoQueue *info_queue = nullptr;
+                if(SUCCEEDED(device_->QueryInterface(IID_PPV_ARGS(&info_queue))))
+                {
+                    // info_queue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_CORRUPTION, TRUE);
+                    // info_queue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_ERROR, TRUE);
+                    // info_queue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_WARNING, TRUE);
+
+                    D3D12_MESSAGE_ID hide[] = {
+                        D3D12_MESSAGE_ID_MAP_INVALID_NULLRANGE,
+                        D3D12_MESSAGE_ID_UNMAP_INVALID_NULLRANGE,
+                    };
+
+                    D3D12_INFO_QUEUE_FILTER filter = {};
+                    filter.DenyList.NumIDs = _countof(hide);
+                    filter.DenyList.pIDList = hide;
+                    info_queue->AddStorageFilterEntries(&filter);
+                }
             }
         }
 
@@ -4543,6 +4565,7 @@ public:
         }
         constant_buffer_pool_cursors_[fence_index_] = 0;
         resetState();   // re-install state
+        processDebugMessages();
         return runGarbageCollection();
     }
 
@@ -5028,6 +5051,15 @@ public:
         gfx_draw_state->draw_state_.blend_state_.src_blend_alpha_ = src_blend_alpha;
         gfx_draw_state->draw_state_.blend_state_.dst_blend_alpha_ = dst_blend_alpha;
         gfx_draw_state->draw_state_.blend_state_.blend_op_alpha_ = blend_op_alpha;
+        return kGfxResult_NoError;
+    }
+
+    static GfxResult SetDrawStateDisableGeometryShader (GfxDrawState const & draw_state) {
+        uint32_t const draw_state_index = static_cast<uint32_t>(draw_state.handle & 0xFFFFFFFFull);
+        DrawState * gfx_draw_state = draw_states_.at(draw_state_index);
+        if (!gfx_draw_state)
+            return GFX_SET_ERROR(kGfxResult_InvalidParameter, "Cannot set disable geometry shader on an invalid draw state object");
+        gfx_draw_state->draw_state_.enable_geometry_shader_ = false;
         return kGfxResult_NoError;
     }
 
@@ -6201,6 +6233,23 @@ private:
         return kGfxResult_NoError;
     }
 
+    void processDebugMessages () {
+        ID3D12InfoQueue * infoQueue;
+        if (SUCCEEDED(device_->QueryInterface(IID_PPV_ARGS(&infoQueue)))) {
+            UINT64 messageCount = infoQueue->GetNumStoredMessages();
+            for (UINT64 i = 0; i < messageCount; ++i) {
+                SIZE_T messageLength = 0;
+                infoQueue->GetMessage(i, nullptr, &messageLength);
+                if (auto* message = (D3D12_MESSAGE*)malloc(messageLength)) {
+                    infoQueue->GetMessage(i, message, &messageLength);
+                    GFX_PRINTLN(message->pDescription);
+                    free(message);
+                }
+            }
+            infoQueue->ClearStoredMessages();
+        }
+    }
+
     GfxResult createGraphicsPipelineState(Kernel &kernel, DrawState::Data const &draw_state)
     {
         GFX_ASSERT(kernel.pipeline_state_ == nullptr);
@@ -6309,7 +6358,12 @@ private:
             pso_desc.BlendState.RenderTarget->DestBlendAlpha = draw_state.blend_state_.dst_blend_alpha_;
             pso_desc.BlendState.RenderTarget->BlendOpAlpha   = draw_state.blend_state_.blend_op_alpha_;
         }
-        device_->CreateGraphicsPipelineState(&pso_desc, IID_PPV_ARGS(&kernel.pipeline_state_));
+        auto result = device_->CreateGraphicsPipelineState(&pso_desc, IID_PPV_ARGS(&kernel.pipeline_state_));
+        if(FAILED(result))
+        {
+            GFX_PRINT_ERROR(kGfxResult_InternalError, "Failed to create graphics pipeline state: %d", result);
+            processDebugMessages();
+        }
         return kGfxResult_NoError;
     }
 
@@ -6459,7 +6513,13 @@ private:
                 bound_scissor_rect_ = scissor_rect;
                 command_list_->RSSetScissorRects(1, &scissor_rect);
             }
-            command_list_->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            D3D12_PRIMITIVE_TOPOLOGY topology = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+            if(kernel.draw_state_.primitive_topology_type_ == D3D12_PRIMITIVE_TOPOLOGY_TYPE_POINT) {
+                topology = D3D_PRIMITIVE_TOPOLOGY_POINTLIST;
+            } else if (kernel.draw_state_.primitive_topology_type_ == D3D12_PRIMITIVE_TOPOLOGY_TYPE_LINE) {
+                topology = D3D_PRIMITIVE_TOPOLOGY_LINELIST;
+            }
+            command_list_->IASetPrimitiveTopology(topology);
             command_list_->OMSetRenderTargets(color_target_count, color_targets, false, depth_stencil_target.ptr != 0 ? &depth_stencil_target : nullptr);
         }
         uint64_t const previous_descriptor_heap_id = getDescriptorHeapId();
@@ -7852,7 +7912,9 @@ private:
             variable.id_ = variable.parameter_->id_;
         }
     }
-
+// Temporarily disable warning C6011
+#pragma warning(push)
+#pragma warning(disable: 6011)
     void initDescriptorParameter(Kernel const &kernel, Program const &program, bool const invalidate_descriptors, Kernel::Parameter &parameter, uint32_t &descriptor_slot)
     {
         bool const invalidate_descriptor = parameter.parameter_ != nullptr && (invalidate_descriptors || parameter.id_ != parameter.parameter_->id_);
@@ -8565,6 +8627,7 @@ private:
             break;
         }
     }
+#pragma warning(pop)
 
     void bindDrawIdBuffer()
     {
@@ -8762,7 +8825,8 @@ private:
         {
             kernel_type = "Graphics";
             compileShader(program, kernel, kShaderType_VS, kernel.vs_bytecode_, kernel.vs_reflection_);
-            compileShader(program, kernel, kShaderType_GS, kernel.gs_bytecode_, kernel.gs_reflection_);
+            if(kernel.draw_state_.enable_geometry_shader_)
+                compileShader(program, kernel, kShaderType_GS, kernel.gs_bytecode_, kernel.gs_reflection_);
             compileShader(program, kernel, kShaderType_PS, kernel.ps_bytecode_, kernel.ps_reflection_);
             createRootSignature(kernel);
             result = createGraphicsPipelineState(kernel, kernel.draw_state_);
@@ -9896,6 +9960,10 @@ GfxResult gfxDrawStateSetPrimitiveTopologyType(GfxDrawState draw_state, D3D12_PR
 GfxResult gfxDrawStateSetBlendMode(GfxDrawState draw_state, D3D12_BLEND src_blend, D3D12_BLEND dst_blend, D3D12_BLEND_OP blend_op, D3D12_BLEND src_blend_alpha, D3D12_BLEND dst_blend_alpha, D3D12_BLEND_OP blend_op_alpha)
 {
     return GfxInternal::SetDrawStateBlendMode(draw_state, src_blend, dst_blend, blend_op, src_blend_alpha, dst_blend_alpha, blend_op_alpha);
+}
+
+GfxResult gfxDrawStateDisableGeometryShader (GfxDrawState draw_state) {
+    return GfxInternal::SetDrawStateDisableGeometryShader(draw_state);
 }
 
 GfxProgram gfxCreateProgram(GfxContext context, char const *file_name, char const *file_path, char const *shader_model, char const **include_paths, uint32_t include_path_count)
