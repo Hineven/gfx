@@ -15,6 +15,7 @@ if(GFX_ENABLE_GUI)
     target_sources(gfx PRIVATE gfx_imgui.h gfx_imgui.cpp)
 endif()
 if(GFX_ENABLE_SCENE)
+    message("Building gfx with scene loading support")
     target_sources(gfx PRIVATE gfx_scene.h gfx_scene.cpp)
 endif()
 
