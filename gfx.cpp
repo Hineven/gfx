@@ -3268,7 +3268,7 @@ public:
             command_list_->CopyResource(dst_texture.resource_, src_texture.resource_);
         else
         {
-            for(uint32_t mip_level = 0; mip_level < min(dst.mip_levels, src.mip_levels); ++mip_level)
+            for(uint32_t mip_level = 0; mip_level < std::min(dst.mip_levels, src.mip_levels); ++mip_level)
             {
                 D3D12_TEXTURE_COPY_LOCATION dst_location = {};
                 D3D12_TEXTURE_COPY_LOCATION src_location = {};
