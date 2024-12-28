@@ -223,6 +223,9 @@ GfxRaytracingPrimitive gfxCreateRaytracingPrimitiveInstance(GfxContext context, 
 GfxRaytracingPrimitive gfxCreateRaytracingPrimitiveProcedural(GfxContext context, GfxAccelerationStructure acceleration_structure);
 GfxResult gfxDestroyRaytracingPrimitive(GfxContext context, GfxRaytracingPrimitive raytracing_primitive);
 
+void gfxSetRaytracingPrimitiveActive (GfxContext context, GfxRaytracingPrimitive raytracing_primitive, bool active = true);
+
+
 GfxResult gfxRaytracingPrimitiveBuild(GfxContext context, GfxRaytracingPrimitive raytracing_primitive, GfxBuffer vertex_buffer, uint32_t vertex_stride = 0, GfxBuildRaytracingPrimitiveFlags build_flags = 0);
 GfxResult gfxRaytracingPrimitiveBuild(GfxContext context, GfxRaytracingPrimitive raytracing_primitive, GfxBuffer index_buffer, GfxBuffer vertex_buffer, uint32_t vertex_stride = 0, GfxBuildRaytracingPrimitiveFlags build_flags = 0);
 GfxResult gfxRaytracingPrimitiveBuildProcedural(GfxContext context, GfxRaytracingPrimitive raytracing_primitive, GfxBuffer aabb_buffer, uint32_t aabb_stride = 0, GfxBuildRaytracingPrimitiveFlags build_flags = 0);

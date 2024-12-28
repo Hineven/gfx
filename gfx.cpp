@@ -455,6 +455,7 @@ class GfxInternal
 
     struct RaytracingPrimitive
     {
+        bool is_active_ {true};
         uint32_t index_ = 0;
         float transform_[16] = {};
         uint32_t instance_id_ = 0;
@@ -2198,6 +2199,7 @@ public:
             GfxBuffer const &buffer = getRaytracingPrimitiveBuffer(gfx_raytracing_primitive);
             if(!buffer_handles_.has_handle(buffer.handle))
                 continue;   // no valid BVH memory, probably wasn't built
+            if(!gfx_raytracing_primitive.is_active_) continue; // skip inactive instances
             D3D12_RAYTRACING_INSTANCE_DESC instance_desc = {};
             Buffer const &gfx_buffer = buffers_[buffer];
             for(uint32_t row = 0; row < 3; ++row)
@@ -2339,6 +2341,36 @@ public:
         gfx_raytracing_primitive.instance_.parent_ = raytracing_primitive;
         gfx_acceleration_structure.needs_rebuild_ = true;
         return cloned_raytracing_primitive;
+    }
+
+    void setRaytracingPrimitiveActive (GfxRaytracingPrimitive raytracing_primitive, bool active) {
+        if(dxr_device_ == nullptr) return;
+        for(;;)
+        {
+            if(!raytracing_primitive_handles_.has_handle(raytracing_primitive.handle))
+            {
+                GFX_PRINT_ERROR(kGfxResult_InvalidParameter, "Cannot set a raytracing primitive active state using an invalid raytracing primitive object");
+                return ;
+            }
+            RaytracingPrimitive const &found_raytracing_primitive = raytracing_primitives_[raytracing_primitive];
+            if(found_raytracing_primitive.type_ != RaytracingPrimitive::kType_Instance)
+                break;  // found parent raytracing primitive
+            raytracing_primitive = found_raytracing_primitive.instance_.parent_;
+            break;
+        }
+        RaytracingPrimitive & gfx_raytracing_primitive = raytracing_primitives_[raytracing_primitive];
+        GfxAccelerationStructure const &acceleration_structure = getRaytracingPrimitiveAccelerationStructure(gfx_raytracing_primitive);
+        GFX_ASSERT(!isInterop(acceleration_structure)); // should never happen
+        if(!acceleration_structure_handles_.has_handle(acceleration_structure.handle))
+        {
+            GFX_PRINT_ERROR(kGfxResult_InvalidParameter, "Cannot set raytracing primitive active state using an invalid acceleration structure object");
+            return ;
+        }
+        AccelerationStructure &gfx_acceleration_structure = acceleration_structures_[acceleration_structure];
+        if(gfx_raytracing_primitive.is_active_ != active) {
+            gfx_acceleration_structure.needs_rebuild_ = true;
+        }
+        gfx_raytracing_primitive.is_active_ = active;
     }
 
     GfxRaytracingPrimitive createRaytracingPrimitiveProcedural(GfxAccelerationStructure const &acceleration_structure)
@@ -9789,6 +9821,13 @@ GfxRaytracingPrimitive gfxCreateRaytracingPrimitive(GfxContext context, GfxAccel
     GfxInternal *gfx = GfxInternal::GetGfx(context);
     if(!gfx) return raytracing_primitive;   // invalid context
     return gfx->createRaytracingPrimitive(acceleration_structure);
+}
+
+void gfxSetRaytracingPrimitiveActive (GfxContext context, GfxRaytracingPrimitive raytracing_primitive, bool active)
+{
+    GfxInternal *gfx = GfxInternal::GetGfx(context);
+    if(!gfx) return;    // invalid context
+    gfx->setRaytracingPrimitiveActive(raytracing_primitive, active);
 }
 
 GfxRaytracingPrimitive gfxCreateRaytracingPrimitiveInstance(GfxContext context, GfxRaytracingPrimitive raytracing_primitive)
