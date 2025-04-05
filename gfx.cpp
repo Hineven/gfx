@@ -34,6 +34,7 @@ SOFTWARE.
 #include <d3d12shader.h>        // shader reflection
 #include <D3D12MemAlloc.h>      // D3D12 memory allocator
 #include <dxgi1_6.h>            // IDXGIFactory6 + IDXGIOutput6
+#include <winerror.h>
 
 #ifdef __clang__
 #   pragma clang diagnostic push
@@ -1085,6 +1086,11 @@ public:
     {
         if(GetD3D12SDKVersion() != 614)
             return GFX_SET_ERROR(kGfxResult_InternalError, "Agility SDK version not exported correctly");
+
+        HMODULE d3d12_dll = LoadLibraryA("D3D12Core.dll");
+        if (!d3d12_dll)
+            return GFX_SET_ERROR(kGfxResult_InternalError, "Failed to load D3D12Core.dll");
+
         if((flags & kGfxCreateContextFlag_EnableDebugLayer) != 0)
         {
             ID3D12Debug1 *debug_controller = nullptr;
@@ -1185,10 +1191,15 @@ public:
             DXGIAdapterReleaser const adapter_releaser(adapters);
 
             uint32_t i = 0;
-            for(; i < ARRAYSIZE(adapters); ++i)
-                if(!adapters[i]) break; else
-                if(SUCCEEDED(D3D12CreateDevice(adapters[i], D3D_FEATURE_LEVEL_12_1, IID_PPV_ARGS(&device_))))
-                    break;  // we've got a valid device :)
+            for(; i < ARRAYSIZE(adapters); ++i) {
+                if(!adapters[i]) {
+                    continue ;
+                }
+                auto result = D3D12CreateDevice(adapters[i], D3D_FEATURE_LEVEL_12_1, IID_PPV_ARGS(&device_));
+                if (SUCCEEDED(result)) break;
+                printf("%x\n", result);
+                break;
+            }
             if(device_ == nullptr)
                 return GFX_SET_ERROR(kGfxResult_InternalError, "Unable to create D3D12 device");
             if((flags & kGfxCreateContextFlag_EnableStablePowerState) != 0 && IsDeveloperModeEnabled() && !SUCCEEDED(device_->SetStablePowerState(TRUE)))

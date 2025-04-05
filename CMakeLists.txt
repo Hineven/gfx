@@ -182,8 +182,12 @@ if(GFX_ENABLE_GUI)
     )
     FetchContent_MakeAvailable(imgui)
 
+    # Exclude incomplete externally found imgui library
+    unset(imgui_FOUND)
+
     if(imgui_FOUND)
         target_link_libraries(gfx PUBLIC imgui::imgui)
+        target_include_directories(gfx PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/third_party/imgui")
     else()
         target_include_directories(gfx PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/third_party/imgui")
         target_compile_definitions(gfx PRIVATE GFX_IMGUI_SOURCE)
